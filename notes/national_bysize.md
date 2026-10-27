@@ -229,6 +229,16 @@ return count whose components can overlap is NA with bounds, plus the Pub
   cells verified 2026-09-27. The additivity check reports the group as
   `combined`; treat these cells as unreliable.
 
+## Companion tables
+
+- **Coefficients of variation** for Tables 1.4, 2.1 and 3.3, cell for cell:
+  [by_size_cv.md](by_size_cv.md).
+- The Pub 1304 tables **not** by size of AGI — Tables 1.3 and 2.2 by filing
+  status ([by_status.md](by_status.md)), Tables 4.1–4.3 by AGI percentile
+  ([tax_shares.md](tax_shares.md)) and Table A over time
+  ([table_a.md](table_a.md)) — are cross-checked against these tables by
+  `check_tables.R`.
+
 ## Known consumers
 
 - **Affordability-Index** (Budget-Lab-Yale/Affordability-Index): the national

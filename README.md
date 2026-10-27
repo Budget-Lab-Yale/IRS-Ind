@@ -19,6 +19,12 @@ statistics**:
 - **sales of capital assets** (the Schedule D study: gains and losses by asset
   type, month of sale and holding period, TY1985–2015, plus a 1999–2007
   panel). A closed series; Pub 1304 Table 1.4A is its live successor.
+- the Pub 1304 tables **not by size of AGI**: Tables 1.3 and 2.2 (every item
+  by filing status, for all returns and for itemizers, TY1996–2023), Tables
+  4.1–4.3 (returns excluding dependents by AGI percentile: shares, floors
+  and items for the top 0.001% to the top 50%, TY1986–2023), and Table A
+  (selected items TY1990–2023); plus SOI's unlinked **coefficients of
+  variation** for Tables 1.4, 2.1 and 3.3 (TY1997/2003–2023).
 
 This repo holds the **code only** — data is downloaded on demand, either into
 the repo's own (gitignored) `data/` folder or to a separate location of your
@@ -76,9 +82,26 @@ It reads cells through `read_xls_cells.py` (python3 + xlrd), because SOI's
 exits non-zero if a size-class total or a cross-table return count fails
 without a combined or suppressed cell to explain it.
 
+Align the tables that are not by size (1.3, 2.2, 4.1–4.3, A) and parse the
+coefficients of variation, joined to the cells they describe (see
+[notes/by_status.md](notes/by_status.md),
+[notes/tax_shares.md](notes/tax_shares.md),
+[notes/table_a.md](notes/table_a.md),
+[notes/by_size_cv.md](notes/by_size_cv.md)):
+
+```bash
+Rscript align_national.R --dest /path/to/store    # writes aligned/bystatus_*, pctile_*, table_a.csv
+Rscript align_cv.R --dest /path/to/store          # writes aligned/cv_bysize.csv (after align_bysize.R)
+```
+
+`align_national.R` exits non-zero if a table's own arithmetic fails without
+an explanation (statuses against all returns; each percentile group's share
+of the returns); `align_cv.R` stops if a published cell has no CV cell.
+
 Then build the harmonized, table-specific panels, with every concept change
 across years resolved (see
-[notes/bysize_panels_plan.md](notes/bysize_panels_plan.md)):
+[notes/bysize_panels_plan.md](notes/bysize_panels_plan.md)); the tables
+above go through the same step:
 
 ```bash
 Rscript harmonize_bysize.R --dest /path/to/store  # writes aligned/panel_*.csv
@@ -91,11 +114,24 @@ blocks and every margin checked (see the same note, "Table 1.6 target view"):
 Rscript build_t16_targets.R --dest /path/to/store # writes aligned/targets_returns_marital_age.csv
 ```
 
+Then cross-check the tables that are not by size against the by-size ones
+(1.3 against 1.4, 3.3, 2.1 and 1.2; 2.2 against 2.1; 4.1 and 4.3 against
+Table 1.4 less Table 1.7, and against each other):
+
+```bash
+Rscript check_tables.R --dest /path/to/store      # writes checks/_tables.csv
+```
+
+It exits non-zero on any difference not pinned, at its exact size, in
+`checks/tables_known_differences.csv`.
+
 Families for `--only` (comma-separated, default all): `geo` (the four
 by-geographic-area CSV sets and their documentation guides), `by_size` (the
 Pub 1304 tables), `ira` (ten IRA tables plus their precision companions),
 `sole_prop` (Schedule C by industry), `w2` (Form W-2), `line_items` (the Pub
-4801/5385 PDFs) and `capital_assets` (the Schedule D study). Flags may be given
+4801/5385 PDFs), `capital_assets` (the Schedule D study), `by_size_cv` (the
+CV workbooks), `by_status` (Tables 1.3 and 2.2), `tax_shares` (Tables
+4.1–4.3) and `table_a`. Flags may be given
 in any order; the two positional arguments are the year range. Each family is
 clamped to the first year it publishes, so the default run spans 1985–2023
 without fetching years a family lacks.
@@ -157,9 +193,20 @@ aligned/            line_items.csv                    every extracted form line,
                     targets_returns_marital_age.csv   Table 1.6 as targets: cells, with
                                                       combined cells in blocks
                     _t16_target_checks.csv            its margin checks
+                    bystatus_{all_items,itemizer_items}.csv  T1.3 and T2.2,
+                                                      every published cell
+                    pctile_{top_shares,bottom_shares,top_items}.csv  T4.1-4.3,
+                                                      every vintage
+                    table_a.csv                       Table A, every vintage
+                    _national_{labels,additivity}.csv their label coverage and
+                                                      own arithmetic (align_national.R)
+                    cv_bysize.csv                     the CVs of T1.4/2.1/3.3,
+                                                      joined to the published cells
+                    _bysize_cv_coverage.csv           CV coverage (align_cv.R)
 checks/             line_item_values.csv              cover-page totals, all vintages
                     _report.csv                       the run_checks.R report
                     _arithmetic.csv                   the check_arithmetic.R report
+                    _tables.csv, _tables_unpaired.csv the check_tables.R report
 national/sole_prop/ sp_t{nn}_{year}.xls               Nonfarm sole proprietorships
                     sp_t{nn}_sic_{year}.xls           (Schedule C) by industry; the
                     sp_t02_expanded_2015.xls          canonical series is NAICS, _sic_
@@ -188,6 +235,15 @@ national/by_size/   income_sources_{year}.xls         SOI Complete-Report (Pub 1
                     tax_generated_byrate_{year}.xls   T3.5: tax by marginal rate bracket
                     exemptions_{year}.xls             T2.3: exemptions by type; closed
                                                       series TY1996-2017, mirrored whole
+national/by_size_cv/ {family}_cv_{year}.xls           CVs for T1.4 (income_sources),
+                                                      T2.1, T3.3, cell for cell
+national/by_status/ all_items_{year}.xls              T1.3: every item by filing status
+                    itemizer_items_{year}.xls         T2.2: the same for itemizers
+national/tax_shares/ top_shares_{year}.xls[x]         T4.1 (descending percentiles) and
+                    bottom_shares_{year}.xls          T4.2 (ascending): time series,
+                                                      one vintage per year
+                    top_items_{year}.xls              T4.3: one year, ~20 items
+national/table_a/   table_a_{year}.xls                Table A: items 1990 to {year}
 manifest.csv        path, source url, year, bytes, md5, retrieval date
 ```
 
@@ -227,6 +283,17 @@ the files:
 - [notes/national_bysize.md](notes/national_bysize.md) — national Complete-Report
   tables by size of AGI (table→filename map, the fine top brackets, $thousands
   units, multi-row headers, TCJA-2018 combined IRA/pension one-off)
+- [notes/by_size_cv.md](notes/by_size_cv.md) — SOI's coefficients of
+  variation for Tables 1.4, 2.1 and 3.3 (unlinked files, the zero CVs of the
+  $10M+ class, the misprinted column number)
+- [notes/by_status.md](notes/by_status.md) — Tables 1.3 and 2.2 by filing
+  status (four filename eras, the two-block BIFF4 years, marks whose meaning
+  changes by footnote, the exemptions row that counts exemptions, the
+  published inconsistencies the checks found)
+- [notes/tax_shares.md](notes/tax_shares.md) — Tables 4.1–4.3 by AGI
+  percentile (vintages, the TY2009 positive-AGI universe, the `in03etr`
+  files that are not Table 4.3, revisions between vintages)
+- [notes/table_a.md](notes/table_a.md) — Table A, selected items 1990 on
 - [notes/alignment_plan.md](notes/alignment_plan.md) — the standing plan:
   cross-year panels for the by-size tables (Tier 1, built: aligned and
   harmonized layers), the merged Table 1.6 target view next, pushing the
@@ -259,6 +326,10 @@ The SOI documentation guides themselves are downloaded alongside the data
   **708 files**; the Pub 1304 gate passes at 152 exact / 4 known differences /
   0 unexplained over 156 comparisons, TY2011–2023.
 
+**2026-10-26, the four families added since** (`by_size_cv`, `by_status`,
+`tax_shares`, `table_a`): every file through TY2023 mirrored; TY2024 probed
+for each and absent.
+
 To refresh: re-run that sweep, then re-verify the md5 of the two current
 PDFs — those are the only files that can change underneath a stable URL.
 
@@ -286,6 +357,11 @@ PDFs — those are the only files that can change underneath a stable URL.
 | Pub 4801 line items | 2003–2023 | `03linecnt` / `{YYYY}linecnt` / `{yy}inlinecount` / `p4801--{rev}` / current `p4801.pdf`; the revision token is a publication date, not derivable |
 | Pub 5385 line items | 2017–2023 | `p5385--{rev}` / current `p5385.pdf`; TY2018+2019 share one URL as a PDF Portfolio |
 | Capital assets Tables 1–4 | 1985, 1997–99, 2007–15 (closed) | eight stubs: `85in0{n}cg`, `97soca{n}a`, `98in{n}ab`, `99in0{n}ab`, `07in0{n}ab`, `{yy}in0{n}soca` (08–09), **`{yy}0{n}insoca`** (10–12, transposed), `{yy}in0{n}soca.xlsx` (13–15). TY2016+ probed, absent |
+| Pub 1304 T1.3 / T2.2 (by status) | 1996–2023 | `{yy}in13ar` (1996, 1998–2000), `97in13`, `{yy}in13ms` (2001+); `{yy}in22ms` (1996, 2001+), `97in22`, `{yy}in22id` (1998–2000) |
+| Pub 1304 T4.1 / T4.2 (tax shares) | vintages 2009–2023 (data 1986/2001–) | `{yy}in01etr` / `{yy}in02etr` (2009–2018), `{yy}in41ts` / `{yy}in42ts` (2019+; T4.1 is `.xlsx` from 2023). The TY2009 vintage covers positive-AGI returns |
+| Pub 1304 T4.3 | 2014–2023 | `{yy}in03etr` (2014–2018; the 2009–2011 files of that name are a different table), `{yy}in43ts` (2019+) |
+| Pub 1304 Table A | vintages 2012–2023 (data 1990–) | `{yy}intaba.xls`; only the newest is linked |
+| CVs for T1.4 / T2.1 / T3.3 | 1997–2023 / 2003–2023 / 2003–2023 | `{yy}in14cv` / `in21cv` / `in33cv` (`.xls`); unlinked |
 | Capital assets extras | 1985 T5–6; 2012 T5–9; 1997 revised; panels | `85in0{5,6}cg.xls`; `120{n}insoca.xls`; `98in{5..8}ab.xlsx` (the page's `/pub/irs-tai/` links for 6–8 are dead — `/pub/irs-soi/` has them); `99-03in0{n}..` and `04-07in01st` + `07in0{n}..` |
 
 Other HT2 notes: the `N2` column is *number of exemptions* through tax year

@@ -47,6 +47,17 @@
 #                      tax_liability_{year}.xls
 #                      tax_generated_byrate_{year}.xls
 #                      exemptions_{year}.xls      T2.3, closed series 1996-2017
+#   national/by_size_cv/ {family}_cv_{year}.xls   SOI's coefficients of variation
+#                                                 for T1.4, T2.1, T3.3 (family =
+#                                                 the by-size table they describe)
+#   national/by_status/ all_items_{year}.xls      Pub 1304 tables by filing status,
+#                      itemizer_items_{year}.xls  no AGI cut: T1.3 (all returns)
+#                                                 and T2.2 (itemizers)
+#   national/tax_shares/ top_shares_{year}.xls[x] Tax shares by AGI percentile:
+#                      bottom_shares_{year}.xls   T4.1 / T4.2 (time series; each
+#                      top_items_{year}.xls       year is a vintage) and T4.3
+#   national/table_a/  table_a_{year}.xls         Pub 1304 Table A, selected items
+#                                                 1990 to the vintage year
 #   manifest.csv       path, source url, year, bytes, md5, retrieval date
 #
 # SOI file-naming quirks encoded below (verified against irs.gov 2026-07-12):
@@ -66,7 +77,8 @@
 #   Rscript download_irs_ind.R --only by_size               # one family only
 #
 # Families (--only, comma-separated; default all): geo, by_size, ira,
-# sole_prop, w2, line_items, capital_assets. Flags may be given in any order;
+# sole_prop, w2, line_items, capital_assets, by_size_cv, by_status,
+# tax_shares, table_a. Flags may be given in any order;
 # the two positional arguments are the year range. Each family is clamped to
 # the first year it publishes (see FIRST_YEAR), so the default run covers
 # 1985-2023 without probing years a family lacks.
@@ -92,7 +104,7 @@ script_dir = dirname(sub('--file=', '', grep('--file=', commandArgs(), value = T
 if (is.na(script_dir) || script_dir == '') script_dir = '.'
 
 FAMILIES = c('geo', 'by_size', 'ira', 'sole_prop', 'w2', 'line_items',
-             'capital_assets')
+             'capital_assets', 'by_size_cv', 'by_status', 'tax_shares', 'table_a')
 
 # First tax year each family publishes. The default run spans their union and
 # every family is clamped to its own floor, so no year is fetched pointlessly.
@@ -101,7 +113,8 @@ FAMILIES = c('geo', 'by_size', 'ira', 'sole_prop', 'w2', 'line_items',
 # 2011, so a 1996-2010 run emits exemptions and nothing else.
 FIRST_YEAR = c(geo = 2011, by_size = 1996, ira = 2000,
                sole_prop = 1996, w2 = 2014, line_items = 2003,
-               capital_assets = 1985)
+               capital_assets = 1985, by_size_cv = 1997, by_status = 1996,
+               tax_shares = 2009, table_a = 2012)
 
 dest = file.path(script_dir, 'data')
 only = FAMILIES
@@ -547,6 +560,110 @@ targets_capital_assets = function(year) {
   out
 }
 
+# --- by_size_cv: coefficients of variation for Pub 1304 Tables 1.4, 2.1, 3.3 --
+# SOI publishes the sampling error of three by-size tables as companion
+# workbooks laid out cell for cell like the table: same AGI rows, same panels,
+# same column numbers, a CV in percent in each cell. Pub 1304's "Description
+# of the sample" names them ("Tables 1.4 CV, 2.1 CV, and 3.3 CV"), but no SOI
+# page links them; they sit at {yy}in{tbl}cv.xls. Probed for every table
+# number and TY1993-2024 on 2026-10-26: only these three exist, Table 1.4's
+# from TY1997 and Tables 2.1's and 3.3's from TY2003. They are named after
+# the by-size family they describe, so a CV joins to its published cell on
+# family, year and cell. See notes/by_size_cv.md.
+CV_TABLES = c('14' = 'income_sources', '21' = 'itemized_deductions', '33' = 'tax_liability')
+CV_FIRST  = c('14' = 1997, '21' = 2003, '33' = 2003)
+
+targets_by_size_cv = function(year) {
+  yy  = sprintf('%02d', year %% 100)
+  out = list()
+  for (t in names(CV_TABLES)) {
+    if (year < CV_FIRST[[t]]) next
+    out = c(out, list(list(
+      url = file.path(SOI, sprintf('%sin%scv.xls', yy, t)),
+      to  = sprintf('national/by_size_cv/%s_cv_%d.xls', CV_TABLES[[t]], year), gz = FALSE)))
+  }
+  out
+}
+
+# --- by_status: Pub 1304 Tables 1.3 and 2.2, by filing status ---------------
+# Every income item, adjustment, deduction, credit and tax, for all returns
+# (Table 1.3) and for returns with itemized deductions (Table 2.2), by
+# filing status with no AGI cut: the items run down the rows, the statuses
+# across. Both are published for every year TY1996-2023 under four stubs
+# (probed 2026-10-26; nothing before TY1996 under any of them):
+#   T1.3  {yy}in13ar (1996, 1998-2000), bare 97in13 (1997), {yy}in13ms (2001+)
+#   T2.2  {yy}in22ms (1996, 2001+), bare 97in22 (1997), {yy}in22id (1998-2000)
+# TY1996-2003 are BIFF4 and print the columns in two blocks, one below the
+# other, as Table 2.3 does. See notes/by_status.md.
+status_file = function(yy, year, tbl) {
+  if (year == 1997) return(sprintf('97in%s.xls', tbl))
+  suffix = if (year >= 2001) 'ms'
+           else if (tbl == '13') 'ar'
+           else if (year == 1996) 'ms' else 'id'
+  sprintf('%sin%s%s.xls', yy, tbl, suffix)
+}
+
+targets_by_status = function(year) {
+  yy = sprintf('%02d', year %% 100)
+  list(
+    list(url = file.path(SOI, status_file(yy, year, '13')),
+         to  = sprintf('national/by_status/all_items_%d.xls', year),      gz = FALSE),  # T1.3
+    list(url = file.path(SOI, status_file(yy, year, '22')),
+         to  = sprintf('national/by_status/itemizer_items_%d.xls', year), gz = FALSE)   # T2.2
+  )
+}
+
+# --- tax_shares: returns excluding dependents by AGI percentile --------------
+# Tables 4.1 and 4.2 are TIME SERIES: each year's file carries every tax year
+# from its first (1986 in the TY2009 file, 2001 from TY2010) to its own, by
+# descending (4.1: top 0.001% ... top 50%) or ascending (4.2: bottom 50% ...
+# 99%) cumulative percentile. Every year's file is mirrored as a vintage
+# under the year it was published for; the panels keep the newest vintage
+# of each tax year. Table 4.3 is one year per file: the descending cumulative
+# percentiles with their AGI floors and about twenty income, deduction,
+# credit and tax items. Before TY2019 the three were Tables 1-3 of an
+# "early release" set:
+#   T4.1  {yy}in01etr.xls (2009-2018), {yy}in41ts.xls (2019-2022), .xlsx (2023+)
+#   T4.2  {yy}in02etr.xls (2009-2018), {yy}in42ts.xls (2019+)
+#   T4.3  {yy}in03etr.xls (2014-2018), {yy}in43ts.xls (2019+)
+# Probed 2026-10-26. {yy}in03etr.xls also exists for TY2009-2011, but there it
+# is a third time series (expanded descending percentiles, 2001 on), not
+# Table 4.3, and is not mirrored; TY2012-2013 have no Table 4.3. The TY2009
+# vintage of 4.1 and 4.2 covers returns with positive AGI, not returns
+# excluding dependents. See notes/tax_shares.md.
+TAX_SHARES_43_FIRST = 2014
+
+targets_tax_shares = function(year) {
+  yy  = sprintf('%02d', year %% 100)
+  etr = year <= 2018
+  ext41 = if (year >= 2023) 'xlsx' else 'xls'
+  out = list(
+    list(url = file.path(SOI, if (etr) sprintf('%sin01etr.xls', yy) else sprintf('%sin41ts.%s', yy, ext41)),
+         to  = sprintf('national/tax_shares/top_shares_%d.%s', year, if (etr) 'xls' else ext41), gz = FALSE),  # T4.1
+    list(url = file.path(SOI, if (etr) sprintf('%sin02etr.xls', yy) else sprintf('%sin42ts.xls', yy)),
+         to  = sprintf('national/tax_shares/bottom_shares_%d.xls', year), gz = FALSE)                          # T4.2
+  )
+  if (year >= TAX_SHARES_43_FIRST) {
+    out = c(out, list(list(
+      url = file.path(SOI, if (etr) sprintf('%sin03etr.xls', yy) else sprintf('%sin43ts.xls', yy)),
+      to  = sprintf('national/tax_shares/top_items_%d.xls', year), gz = FALSE)))                               # T4.3
+  }
+  out
+}
+
+# --- table_a: Pub 1304 Table A, selected income and tax items ---------------
+# All returns, every item on Form 1040 that SOI tracks, TY1990 to the file's
+# own year, in current and constant 1990 dollars, with the percent change
+# from the year before. Like Tables 4.1-4.2 a time series republished each
+# year, so each file is a vintage. {yy}intaba.xls from TY2012 (probed
+# 2026-10-26; nothing earlier under that stub). The Pub 1304 page links only
+# the newest. See notes/table_a.md.
+targets_table_a = function(year) {
+  yy = sprintf('%02d', year %% 100)
+  list(list(url = file.path(SOI, sprintf('%sintaba.xls', yy)),
+            to  = sprintf('national/table_a/table_a_%d.xls', year), gz = FALSE))
+}
+
 # One flat target list for the families selected on the command line, each
 # clamped to the first year it publishes.
 targets = function(year, families) {
@@ -559,6 +676,10 @@ targets = function(year, families) {
   if (wanted('w2'))         out = c(out, targets_w2(year))
   if (wanted('line_items')) out = c(out, targets_line_items(year))
   if (wanted('capital_assets')) out = c(out, targets_capital_assets(year))
+  if (wanted('by_size_cv')) out = c(out, targets_by_size_cv(year))
+  if (wanted('by_status'))  out = c(out, targets_by_status(year))
+  if (wanted('tax_shares')) out = c(out, targets_tax_shares(year))
+  if (wanted('table_a'))    out = c(out, targets_table_a(year))
   out
 }
 

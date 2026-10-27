@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Dump the first sheet of a Pub 1304 .xls as CSV on stdout, one record per
-non-empty cell plus one per merged range:
+"""Dump the first sheet of a Pub 1304 .xls (or .xlsx) as CSV on stdout, one
+record per non-empty cell plus one per merged range:
 
     C,row,col,flag,value      a cell (1-based); value as text, numbers as shortest round-trip repr
     M,first_row,last_row,first_col,last_col   a merged range (1-based inclusive),
@@ -21,6 +21,11 @@ Requires xlrd. It reads both formats in the store: BIFF8 (TY2004 on) and
 the BIFF4 of Table 2.3's TY1996-2003 files (TY1997 aside). The flag formats
 begin in TY2005; earlier vintages carry none (checked 2026-09-26), so an
 empty flag column there is what SOI published, not a reader gap.
+
+A .xlsx file (Table 4.1 from TY2023) is read with openpyxl instead, which
+xlrd 2 no longer opens. Its records are the same: the flag comes from the
+same number formats, merged ranges from the sheet's merge list, and a header
+centred across a selection from the "centerContinuous" alignment.
 """
 
 import csv
@@ -32,8 +37,6 @@ import xlrd
 if len(sys.argv) != 2:
     sys.exit("usage: read_xls_cells.py <file.xls>")
 
-book = xlrd.open_workbook(sys.argv[1], formatting_info=True)
-sheet = book.sheet_by_index(0)
 out = csv.writer(sys.stdout, lineterminator="\n")
 
 # The flag is decided by the positive section of the format, which every
@@ -41,12 +44,58 @@ out = csv.writer(sys.stdout, lineterminator="\n")
 FLAG_RE = re.compile(r'^"(\*+)\s*"')
 
 
-def cell_flag(r, c):
-    fmt = book.format_map[book.xf_list[sheet.cell_xf_index(r, c)].format_key]
-    m = FLAG_RE.match(fmt.format_str)
+def flag_of(format_str):
+    m = FLAG_RE.match(format_str or "")
     if not m:
         return ""
     return "combined" if len(m.group(1)) >= 2 else "caution"
+
+
+if sys.argv[1].lower().endswith(".xlsx"):
+    import openpyxl
+
+    ws = openpyxl.load_workbook(sys.argv[1]).worksheets[0]
+    for row in ws.iter_rows():
+        for cell in row:
+            v = cell.value
+            if v is None:
+                continue
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                text = str(v)
+                if text.strip() == "":
+                    continue
+                flag = ""
+            else:
+                # float() so an integer prints as xlrd would ("12.0")
+                text = repr(float(v))
+                flag = flag_of(cell.number_format)
+            out.writerow(["C", cell.row, cell.column, flag, text])
+    for rng in sorted(ws.merged_cells.ranges, key=lambda g: (g.min_row, g.min_col)):
+        out.writerow(["M", rng.min_row, rng.max_row, rng.min_col, rng.max_col])
+    for row in ws.iter_rows():
+        c = 0
+        while c < len(row):
+            cell = row[c]
+            if cell.value is None or str(cell.value).strip() == "" or \
+                    cell.alignment.horizontal != "centerContinuous":
+                c += 1
+                continue
+            end = c + 1
+            while end < len(row) and (row[end].value is None or str(row[end].value).strip() == "") \
+                    and row[end].alignment.horizontal == "centerContinuous":
+                end += 1
+            if end - c >= 2:
+                out.writerow(["M", cell.row, cell.row, c + 1, end])
+            c = end
+    sys.exit(0)
+
+book = xlrd.open_workbook(sys.argv[1], formatting_info=True)
+sheet = book.sheet_by_index(0)
+
+
+def cell_flag(r, c):
+    fmt = book.format_map[book.xf_list[sheet.cell_xf_index(r, c)].format_key]
+    return flag_of(fmt.format_str)
 
 
 for r in range(sheet.nrows):

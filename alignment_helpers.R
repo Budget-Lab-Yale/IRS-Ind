@@ -25,8 +25,9 @@
 
 # The first sheet as list(m, flag, merges): m and flag are character matrices
 # in absolute sheet coordinates ('' where empty), merges a data.frame of
-# 1-based inclusive ranges.
-read_bysize_sheet = function(path, helper_dir) {
+# 1-based inclusive ranges. trim = FALSE keeps the leading spaces that mark a
+# sub-item in Table A (align_national.R).
+read_bysize_sheet = function(path, helper_dir, trim = TRUE) {
   lines = suppressWarnings(system2(
     'python3', c(shQuote(file.path(helper_dir, 'read_xls_cells.py')), shQuote(path)),
     stdout = TRUE, stderr = TRUE))
@@ -43,7 +44,7 @@ read_bysize_sheet = function(path, helper_dir) {
   k = as.integer(cells$V3)
   m    = matrix('', max(r), max(k))
   flag = matrix('', max(r), max(k))
-  m[cbind(r, k)]    = trimws(cells$V5)
+  m[cbind(r, k)]    = if (trim) trimws(cells$V5) else cells$V5
   flag[cbind(r, k)] = cells$V4
   merges = data.frame(first_row = as.integer(mg$V2), last_row = as.integer(mg$V3),
                       first_col = as.integer(mg$V4), last_col = as.integer(mg$V5))
@@ -66,6 +67,14 @@ numrow_run = function(v) {
   if (well_formed_run(v)) return(v)
   a = abs(v)
   if (well_formed_run(a)) return(a)
+  # One misprinted number whose neighbours are k - 1 and k + 1 is taken to be
+  # k: SOI's TY2018 Table 3.3 CV workbook prints column 111 as "11". Tried
+  # only after the run has failed as printed, so no well-formed row changes.
+  bad = which(c(FALSE, diff(a) < 1))
+  if (length(bad) == 1 && bad < length(a) && a[bad + 1] - a[bad - 1] == 2) {
+    a[bad] = a[bad - 1] + 1
+    if (well_formed_run(a)) return(a)
+  }
   NULL
 }
 
@@ -118,9 +127,17 @@ normalize_label = function(x) {
 #   [n]       footnote-only cell (e.g. a percent SOI does not compute).
 #   d         suppressed ("d" printed in place of the value).
 #   '-'       a printed dash: none reported (0).
+#   n/a       "N/A", not applicable: the item did not exist that year (Table
+#             A) or has no meaning in the cell (the AGI floor of all returns
+#             in Tables 4.1 and 4.3).
+# Tables 1.3 and 2.2 for TY1997 print a dagger for data deleted to avoid
+# disclosure (their own footnote), so it reads as 'd'; the TY1997 Table 1.4
+# CV workbook prints one combined cell as "**'", a stray quote.
 clean_value = function(x, fmt_flag) {
   if (x == '') return(list(value = NA_real_, flag = 'blank'))
-  if (tolower(x) == 'd') return(list(value = NA_real_, flag = 'd'))
+  if (tolower(x) == 'd' || x == '\u2020') return(list(value = NA_real_, flag = 'd'))
+  if (toupper(x) == 'N/A') return(list(value = NA_real_, flag = 'n/a'))
+  if (grepl("^\\*+'$", x)) x = sub("'$", '', x)
   if (grepl('^\\[[0-9]+\\]$', x)) return(list(value = NA_real_, flag = x))
   if (grepl('^-+$', x)) return(list(value = 0, flag = '-'))
   raw = gsub(',', '', trimws(gsub('\\[[0-9]+\\]', '', x)))

@@ -4,7 +4,12 @@
 #
 # The harmonized layer of notes/bysize_panels_plan.md: one panel per Pub 1304
 # by-size table, built from the aligned panels (align_bysize.R) with every
-# concept change resolved.
+# concept change resolved. The tables that are not by size (align_national.R:
+# 1.3, 2.2, 4.1-4.3, A) go through the same rules, with their own dimensions:
+# panel = the filing status, universe or dollar band; row = 'total' or the
+# percentile group. For the time series (4.1, 4.2, A), where every year's
+# file is a vintage carrying all earlier years, the panel keeps the newest
+# vintage of each tax year and says which in a vintage column.
 #
 #   condense / expand  (checks/bysize_concepts.csv, and AGI classes
 #       automatically): the one category is a consistent total in every year
@@ -41,6 +46,8 @@
 #     agi_change  NA, expand_total, expand_component -- the AGI-class role,
 #             kept apart because a row can be both (TY2011-2012's $200k-$250k
 #             wages): the consistent classes are agi_change != 'expand_component'
+#     The tables from align_national.R add vintage (the file a value comes
+#     from) and unit (as published: 'returns', '$ thousands', 'percent', ...).
 #   _panel_seams.csv    per concept-map entry, the all-returns total of the
 #       consistent series and the sum of its components, every year
 #   _panel_changes.csv  every changed or flagged series and AGI class: its
@@ -82,9 +89,16 @@ NET_BASES = list(income_sources = c('partnership and s corporation', 'partnershi
 ANCHOR_TOLERANCE = 2
 
 # Section and panel labels that differ in form only (see national_bysize.md)
-DIMENSION_SYNONYMS = data.table(
-  family = 'tax_pct_of_agi', from = 'all returns', to = 'all returns with total income tax',
-  reason = 'TY2011-2015 label of the same universe: its total equals Table 3.3 returns with total income tax (99,040,729 in TY2015)')
+DIMENSION_SYNONYMS = rbind(
+  data.table(
+    family = 'tax_pct_of_agi', from = 'all returns', to = 'all returns with total income tax',
+    reason = 'TY2011-2015 label of the same universe: its total equals Table 3.3 returns with total income tax (99,040,729 in TY2015)'),
+  # Tables 1.3 and 2.2 TY1996-2006 word two statuses the older way
+  data.table(
+    family = rep(c('all_items', 'itemizer_items'), each = 2),
+    from = rep(c('joint returns of married persons', 'separate returns of married persons'), 2),
+    to = rep(c('returns of married persons filing jointly', 'returns of married persons filing separately'), 2),
+    reason = 'TY1996-2006 wording of the same filing status'))
 
 #-----------------------
 # Helpers
@@ -154,6 +168,33 @@ normalize = function(a) {
   d[, .(cell_id, tax_year, table, family, panel, section, row, agi_lo, agi_hi, series,
         measure, value = as.numeric(value), flag, derived, change, change_note,
         agi_change, agi_note, bound_lo, bound_hi)]
+}
+
+# The tables from align_national.R: their aligned files already carry the
+# series key (item), measure, unit and the cumulative percentile group
+normalize_national = function(a) {
+  d = as.data.table(a)
+  d[, section := as.character(section)]
+  d[, cell_id := paste(vintage, tax_year, row_seq, col_seq)]
+  lower = function(x) trimws(gsub('\\s+', ' ', tolower(x)))
+  d[, panel := lower(panel)]
+  syn = DIMENSION_SYNONYMS[family == d$family[1]]
+  for (i in seq_len(nrow(syn))) d[panel %in% syn$from[i], panel := syn$to[i]]
+  d[, `:=`(section = NA_character_, row = fifelse(is.na(pctile_group), 'total', as.character(pctile_group)),
+           agi_lo = NA_real_, agi_hi = NA_real_, series = item,
+           derived = FALSE, change = NA_character_, change_note = NA_character_,
+           agi_change = NA_character_, agi_note = NA_character_,
+           bound_lo = NA_real_, bound_hi = NA_real_)]
+  d[, .(cell_id, tax_year, vintage, table, family, panel, section, row, agi_lo, agi_hi, series,
+        measure, unit, value = as.numeric(value), flag, derived, change, change_note,
+        agi_change, agi_note, bound_lo, bound_hi)]
+}
+
+# A time series republished each year: keep, for each tax year and panel
+# (universe or dollar band), the newest vintage that carries it
+newest_vintage = function(a) {
+  a = as.data.table(a)
+  a[a[, .I[vintage == max(vintage)], by = .(tax_year, panel)]$V1]
 }
 
 # Cells within a year: everything but the series and measure
@@ -381,12 +422,16 @@ harmonize_classes = function(d) {
 # Other
 #-----------------------
 
-flag_other = function(d, family_years) {
+flag_other = function(d, family_years, by_panel = FALSE) {
   entries = CONCEPTS[family == d$family[1] & kind == 'other']
-  # published in only some years of the table
+  # published in only some years of the table (of the panel, for the tables
+  # whose panels are universes covering different years: 4.1, 4.2)
   pres = d[derived == FALSE & !is.na(cell_id), .(yrs = list(sort(unique(tax_year)))),
            by = .(panel, section, series, measure)]
-  pres[, partial := lengths(yrs) < length(family_years)]
+  span = if (by_panel) d[!is.na(cell_id), .(n = uniqueN(tax_year)), by = panel] else
+    data.table(panel = unique(pres$panel), n = length(family_years))
+  pres[span, on = 'panel', n_years := i.n]
+  pres[, partial := lengths(yrs) < n_years]
   pres[, note := vapply(yrs, function(y) paste0('published TY', years_text(y)), character(1))]
   d[pres[partial == TRUE], on = .(panel, section, series, measure),
     `:=`(change = fcoalesce(change, 'other'),
@@ -408,7 +453,10 @@ flag_other = function(d, family_years) {
 
 files = sort(list.files(aligned_dir, pattern = '^bysize_[a-z0-9_]+\\.csv$'))
 if (length(files) == 0) stop('no aligned by-size panels under ', aligned_dir, '; run align_bysize.R')
-unknown = setdiff(CONCEPTS$family, sub('^bysize_(.*)\\.csv$', '\\1', files))
+national_files = sort(list.files(aligned_dir, pattern = '^((bystatus|pctile)_[a-z0-9_]+|table_a)\\.csv$'))
+files = c(files, national_files)
+family_of_file = function(f) sub('^(bysize|bystatus|pctile)_', '', sub('\\.csv$', '', f))
+unknown = setdiff(CONCEPTS$family, family_of_file(files))
 if (length(unknown)) stop('concept map names unknown tables: ', paste(unknown, collapse = ', '))
 
 seams = list()
@@ -416,7 +464,9 @@ changes = list()
 for (f in files) {
   a = fread(file.path(aligned_dir, f), na.strings = '')
   fam = a$family[1]
-  d = normalize(a)
+  national = f %in% national_files
+  if (national) a = newest_vintage(a)
+  d = if (national) normalize_national(a) else normalize(a)
   family_years = sort(unique(d$tax_year))
   if (!is.null(NET_BASES[[fam]])) d = add_net_items(d, NET_BASES[[fam]])
   for (i in which(CONCEPTS$family == fam & CONCEPTS$kind != 'other')) {
@@ -425,12 +475,24 @@ for (f in files) {
     seams[[length(seams) + 1]] = r$seam
   }
   d = harmonize_classes(d)
-  d = flag_other(d, family_years)
+  d = flag_other(d, family_years, by_panel = national)
+  if (national) {
+    # rows built here inherit the unit of the series they total, and the
+    # vintage of their year (only the one-year tables have concept entries)
+    units = unique(d[!is.na(cell_id), .(panel, series, measure, unit)])
+    if (anyDuplicated(units[, .(panel, series, measure)])) stop(fam, ': a series published in two units')
+    d[units, on = .(panel, series, measure), unit := fcoalesce(unit, i.unit)]
+    by_measure = unique(d[!is.na(cell_id), .(measure, unit)])
+    by_measure = by_measure[!duplicated(measure) & !duplicated(measure, fromLast = TRUE)]
+    d[by_measure, on = 'measure', unit := fcoalesce(unit, i.unit)]
+    if (anyNA(d$unit)) stop(fam, ': rows with no unit')
+    d[is.na(vintage), vintage := tax_year]
+  }
 
   # every published cell exactly once, unchanged
   pub = d[!is.na(cell_id)]
   if (anyDuplicated(pub$cell_id) || nrow(pub) != nrow(a)) stop(fam, ': published cells lost or duplicated')
-  a[, cell_id := paste(tax_year, row_seq, col_seq)]
+  a[, cell_id := if (national) paste(vintage, tax_year, row_seq, col_seq) else paste(tax_year, row_seq, col_seq)]
   chk = merge(pub[, .(cell_id, value, flag)], a[, .(cell_id, v0 = as.numeric(value), f0 = flag)],
               by = 'cell_id')
   if (!isTRUE(all.equal(chk$value, chk$v0)) || !identical(chk$flag, chk$f0)) {
@@ -445,6 +507,7 @@ for (f in files) {
   setorderv(d, c('tax_year', 'panel', 'section', 'row', 'agi_lo', 'series', 'measure'), na.last = FALSE)
   out = d[, .(tax_year, table, family, panel, section, row, agi_lo, agi_hi, series, measure,
               value, flag, derived, change, change_note, agi_change, agi_note, bound_lo, bound_hi)]
+  if (national) out = cbind(out, d[, .(vintage, unit)])
   fwrite(out, file.path(aligned_dir, sprintf('panel_%s.csv', fam)), na = '')
   yrs = function(y) if (length(y)) years_text(y) else NA_character_
   catalog = function(x, by) x[, .(published = yrs(tax_year[!is.na(cell_id)]),
